@@ -2,6 +2,7 @@ import { useStore } from '@nanostores/react'
 import { useEffect, useRef, useState } from 'react'
 
 import { useSessionView } from '@/app/chat/session-view'
+import { resolveSessionOwner } from '@/app/session/hooks/use-session-actions/utils'
 import { useI18n } from '@/i18n'
 import { isDesktopFsRemoteMode } from '@/lib/desktop-fs'
 import { Download, FolderOpen, MonitorPlay } from '@/lib/icons'
@@ -10,6 +11,8 @@ import { downloadGatewayMediaFile } from '@/lib/media'
 import { previewName } from '@/lib/preview-targets'
 import { notifyError } from '@/store/notifications'
 import { $previewTabSources, closePreviewForSource, openPreview } from '@/store/preview'
+import { assertSessionOwnerResolved } from '@/store/session-owner-resolution'
+import { profileScopeForSessionOwner } from '@/store/session-request-router'
 
 /** What the Electron main process said about this target's LOCAL filesystem
  * state (#101683). `null` keeps the stock card — remote-backend targets keep
@@ -203,10 +206,26 @@ export function PreviewAttachment({ target }: { target: string }) {
     setDownloading(true)
 
     try {
-      // Works in both modes: the Electron main process fetches the bytes
-      // through the session's backend connection (local gateway or remote)
-      // and prompts for a save location.
-      const result = await downloadGatewayMediaFile(target, sessionId ? { sessionId } : undefined)
+      // Bind the file request to the transcript session's backend/profile, not
+      // to whichever profile the window happens to have focused now.
+      const owner = sessionId ? await resolveSessionOwner(sessionId) : undefined
+
+      assertSessionOwnerResolved(owner, { method: 'file.download', sessionId })
+
+      const scope = profileScopeForSessionOwner(owner)
+
+      const origin = sessionId
+        ? {
+            sessionId,
+            ...(typeof scope === 'string'
+              ? { owner: { profile: scope } }
+              : scope
+                ? { owner: scope }
+                : {})
+          }
+        : undefined
+
+      const result = await downloadGatewayMediaFile(target, origin)
 
       if (mountedRef.current && result.saved) {
         setDownloaded(true)
